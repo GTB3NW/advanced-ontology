@@ -1,6 +1,6 @@
 ---
 name: neo4j-ontology
-description: Ontology-as-code for Neo4j. YAML modules generate constraints, lint, views, security and an agent schema. Use when designing or changing a Neo4j data model (object types, interfaces, links, structs, derived properties, security, entity resolution, actions), or when writing Cypher against an ontology-managed graph.
+description: Ontology-as-code for Neo4j. YAML modules generate constraints, lint, views, security, an agent schema and hexagonal TypeScript (domain types, ports, Neo4j adapter). Use when designing or changing a Neo4j data model (object types, interfaces, links, structs, derived properties, security, entity resolution, actions), or when writing Cypher against an ontology-managed graph.
 ---
 
 # Neo4j ontology
@@ -28,7 +28,7 @@ The ontology lives in YAML. The graph, its constraints and the schema agents rea
 3. **Edit** the YAML. New work for another team goes in an `extension` module that implements core interfaces. Change a `core` module only when the core contract itself is wrong.
 4. **Check**: `ontology.ts check DIR`. Done means **0 errors**, and every warning is either fixed or justified to the user in one line.
    - A `core modified (breaking)` error means the change modifies the closed core. Prefer an additive alternative such as a new interface, an optional property or an extension type. If the break is intended and the module owner agrees, re-run with `--allow-breaking`, then run `lock`.
-5. **Build**: `ontology.ts build DIR --out build/` (add `--edition community` if the target lacks Enterprise features).
+5. **Build**: `ontology.ts build DIR --out build/` (add `--edition community` if the target lacks Enterprise features). For application code, use the generated `build/ts/` layers (domain types, ports, Neo4j adapter) rather than hand-writing Cypher calls. See "TypeScript (hexagonal)" in [ref/format.md](ref/format.md).
 6. **Verify against a graph** if one is reachable: apply `schema.cypher`, then `refresh.cypher`, then run `lint.cypher`. Done means **every lint row reports 0 violations**. Run every generated view or action you touched once with real parameters.
 
 ## Writing Cypher against the graph

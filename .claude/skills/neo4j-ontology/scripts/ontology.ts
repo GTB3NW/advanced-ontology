@@ -5,6 +5,8 @@
  *   node ontology.ts build DIR [--out build] [--edition enterprise|community] [--graph neo4j] [--allow-breaking]
  *   node ontology.ts lock  DIR                 accept the current core modules as the new baseline
  *
+ * build also writes TypeScript in hexagonal layers to OUT/ts (domain types, ports, and a neo4j-driver adapter).
+ *
  * See ../ref/format.md for the YAML format.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -65,6 +67,33 @@ const stable = (v: unknown): string =>
     val && typeof val === "object" && !Array.isArray(val)
       ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, val[k]]))
       : val);
+
+
+// ---------- TypeScript codegen vocabulary ----------
+/** Domain (TypeScript) type for each Cypher scalar. Temporals are ISO 8601 strings, so the domain needs no driver. */
+const TS_SCALAR: Record<string, string> = {
+  STRING: "string", INTEGER: "bigint", FLOAT: "number", BOOLEAN: "boolean",
+  DATE: "IsoDate", "LOCAL TIME": "IsoLocalTime", "ZONED TIME": "IsoZonedTime",
+  "LOCAL DATETIME": "IsoLocalDateTime", "ZONED DATETIME": "IsoZonedDateTime", DURATION: "IsoDuration", POINT: "Point",
+};
+const TS_PRIMITIVES = new Set(["string", "bigint", "number", "boolean"]);
+/** Cypher function the Neo4j adapter wraps a temporal parameter in, turning the ISO string into a temporal value. */
+const CYPHER_TEMPORAL: Record<string, string> = {
+  DATE: "date", "LOCAL TIME": "localtime", "ZONED TIME": "time",
+  "LOCAL DATETIME": "localdatetime", "ZONED DATETIME": "datetime", DURATION: "duration",
+};
+/** Fixed names the generated domain.ts declares, so ontology names must not take them. */
+const TS_FIXED_NAMES = [...Object.values(TS_SCALAR).filter((t) => !TS_PRIMITIVES.has(t)), "Page", "CommandOutcome"];
+const tsType = (t: string, ns = ""): string => {
+  const inner = listInner(t);
+  const base = TS_SCALAR[inner ?? t];
+  const q = TS_PRIMITIVES.has(base) ? base : ns + base;
+  return inner ? `${q}[]` : q;
+};
+const ucFirst = (s: string) => s[0].toUpperCase() + s.slice(1);
+const jsdoc = (text: string | undefined, indent = "") =>
+  text ? [`${indent}/** ${oneLine(text).replaceAll("*/", "*\\/")} */`] : [];
+const templateLiteral = (s: string) => "`" + s.replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${") + "`";
 
 class Ontology {
   errors: string[] = [];
@@ -234,6 +263,33 @@ class Ontology {
     for (const [file, sec] of this.security) this.validateSecurity(file, sec);
     this.ruleOfThree();
     this.compositionSmell();
+    this.codegenNames();
+  }
+
+  /** Generated TypeScript names (domain types and port methods) must be unique. */
+  private codegenNames() {
+    const types = new Map<string, string>(TS_FIXED_NAMES.map((n) => [n, "a built-in domain type"]));
+    const methods = new Map<string, string>();
+    const claim = (map: Map<string, string>, name: string, by: string) => {
+      const prev = map.get(name);
+      if (prev) this.errors.push(`generated TypeScript name ${name} (from ${by}) clashes with ${prev}`);
+      else map.set(name, by);
+    };
+    for (const n of Object.keys(this.structs)) claim(types, n, `struct ${n}`);
+    for (const n of Object.keys(this.interfaces)) {
+      claim(types, n, `interface ${n}`);
+      claim(types, `${n}ListItem`, `interface ${n}`);
+      claim(methods, `list${n}`, `interface ${n}`);
+    }
+    for (const [n, t] of Object.entries(this.types)) {
+      if (t.visibility === "hidden") continue;
+      claim(types, n, `object type ${n}`);
+      claim(methods, `get${n}`, `object type ${n}`);
+    }
+    for (const n of Object.keys(this.actions)) {
+      claim(types, `${ucFirst(n)}Params`, `action ${n}`);
+      claim(methods, n, `action ${n}`);
+    }
   }
 
   private validateStruct(name: string, s: El) {
@@ -726,26 +782,48 @@ function genLint(o: Ontology): string {
   return out.join("\n").trimEnd() + "\n";
 }
 
-function projection(o: Ontology, owner: string): string {
-  const parts: string[] = [];
+type Field = { name: string; cypher: string; ts: string; doc?: string };
+
+/** What a view returns for an owner: one entry per output key, with its Cypher and its domain (TypeScript) type. */
+function projectionFields(o: Ontology, owner: string): Field[] {
+  const key = o.types[owner]?.key;
+  const out: Field[] = [];
   for (const [pname, p] of Object.entries(o.props(owner))) {
-    if (p.derived) { parts.push(`${pname}: ${oneLine(p.derived)}`); continue; }
-    if (!p.struct) { parts.push(`.${pname}`); continue; }
+    const doc = p.description;
+    if (p.derived) {
+      const total = /^(COUNT|COLLECT)\s*\{/i.test(p.derived.trim()); // never null
+      out.push({ name: pname, cypher: `${pname}: ${oneLine(p.derived)}`, ts: tsType(normType(p.type)) + (total ? "" : " | null"), doc });
+      continue;
+    }
+    if (!p.struct) {
+      out.push({ name: pname, cypher: `.${pname}`, ts: tsType(normType(p.type)) + (p.required || pname === key ? "" : " | null"), doc });
+      continue;
+    }
     const s = o.structs[p.struct];
     const fields = Object.keys(o.structFields(p.struct));
     if ((s.storage ?? "flat") === "flat") {
-      parts.push(`${pname}: {${fields.map((f) => `${f}: this.${pname}_${f}`).join(", ")}}`);
+      const obj = `{${fields.map((f) => `${f}: this.${pname}_${f}`).join(", ")}}`;
+      const absent = fields.map((f) => `this.${pname}_${f} IS NULL`).join(" AND ");
+      out.push(p.required
+        ? { name: pname, cypher: `${pname}: ${obj}`, ts: p.struct, doc }
+        : { name: pname, cypher: `${pname}: CASE WHEN ${absent} THEN null ELSE ${obj} END`, ts: `${p.struct} | null`, doc });
       continue;
     }
     const match = `MATCH (this)-[:${o.structRel(pname, p)}]->(v:${p.struct}) RETURN v {.*}${orderBy("v", p.reducers)}`;
     const all = `COLLECT { ${match} }`;
     const one = `COLLECT { ${match} LIMIT 1 }[0]`;
-    if (s.mainField) parts.push(`.${pname}`, `${pname}Values: ${all}`);
-    else if (p.multi && p.reducers) parts.push(`${pname}: ${one}`, `${pname}Values: ${all}`);
-    else if (p.multi) parts.push(`${pname}: ${all}`);
-    else parts.push(`${pname}: ${one}`);
+    const values: Field = { name: `${pname}Values`, cypher: `${pname}Values: ${all}`, ts: `${p.struct}[]`, doc: `Every ${p.struct} value of ${pname}.` };
+    if (s.mainField) {
+      out.push({ name: pname, cypher: `.${pname}`, ts: `${tsType(normType(o.structFields(p.struct)[s.mainField].type))} | null`, doc }, values);
+    } else if (p.multi && p.reducers) out.push({ name: pname, cypher: `${pname}: ${one}`, ts: `${p.struct} | null`, doc }, values);
+    else if (p.multi) out.push({ name: pname, cypher: `${pname}: ${all}`, ts: `${p.struct}[]`, doc });
+    else out.push({ name: pname, cypher: `${pname}: ${one}`, ts: `${p.struct} | null`, doc });
   }
-  return `this {\n  ${parts.join(",\n  ")}\n}`;
+  return out;
+}
+
+function projection(o: Ontology, owner: string): string {
+  return `this {\n  ${projectionFields(o, owner).map((f) => f.cypher).join(",\n  ")}\n}`;
 }
 
 function genViews(o: Ontology): Record<string, string> {
@@ -897,6 +975,191 @@ function genAgentSchema(o: Ontology): string {
   return out.join("\n").trimEnd() + "\n";
 }
 
+/**
+ * TypeScript in hexagonal layers:
+ *   ts/domain.ts  pure types (no imports): structs, interfaces, object types, command params
+ *   ts/ports.ts   what the application core needs: OntologyQueries (views) and OntologyCommands (actions)
+ *   ts/neo4j.ts   the driven adapter implementing both ports with neo4j-driver; the only file that imports it
+ */
+function genTs(o: Ontology): Record<string, string> {
+  const header = (role: string) => [`// Generated by ontology.ts. Do not edit.`, `// ${role}`, ""];
+  const visible = Object.entries(o.types).filter(([, t]) => t.visibility !== "hidden");
+  const params = (a: El) => entries(a.params).map(([p, t]) => [p, normType(t)] as [string, string]);
+
+  // ----- domain -----
+  const d = [...header("Domain layer: plain TypeScript with no infrastructure imports. Temporals are ISO 8601 strings, INTEGER is bigint."),
+    "/** ISO 8601 date, e.g. `2026-03-12`. */", "export type IsoDate = string;",
+    "/** ISO 8601 local time, e.g. `19:00:00`. */", "export type IsoLocalTime = string;",
+    "/** ISO 8601 time with offset, e.g. `19:00:00-06:00`. */", "export type IsoZonedTime = string;",
+    "/** ISO 8601 local date-time, e.g. `2026-03-12T19:00:00`. */", "export type IsoLocalDateTime = string;",
+    "/** ISO 8601 date-time with offset and optional zone id, e.g. `2026-03-12T19:00:00-06:00[America/Denver]`. */",
+    "export type IsoZonedDateTime = string;",
+    "/** ISO 8601 duration, e.g. `P1DT2H`. */", "export type IsoDuration = string;",
+    "/** A spatial point. srid 4326/4979 is WGS-84 (x = longitude, y = latitude), 7203/9157 is Cartesian. */",
+    "export interface Point { srid: number; x: number; y: number; z?: number }", "",
+    "/** Paging for list queries. */", "export interface Page { skip: number; limit: number }", "",
+    "/** What a command changed in the graph. All zero means it matched nothing. */",
+    "export interface CommandOutcome {",
+    ...["nodesCreated", "nodesDeleted", "relationshipsCreated", "relationshipsDeleted", "propertiesSet", "labelsAdded", "labelsRemoved"]
+      .map((k) => `  ${k}: number;`),
+    "}", ""];
+  const iface = (name: string, desc: string | undefined, ext: string[], fields: Field[]) => {
+    d.push(...jsdoc(desc), `export interface ${name}${ext.length ? ` extends ${ext.join(", ")}` : ""} {`);
+    for (const f of fields) d.push(...jsdoc(f.doc, "  "), `  ${f.name}: ${f.ts};`);
+    d.push("}", "");
+  };
+  if (Object.keys(o.structs).length) d.push("// ----- structs -----", "");
+  for (const [name, s] of Object.entries(o.structs)) {
+    d.push(...jsdoc(s.description), `export interface ${name} {`);
+    for (const [f, fs] of Object.entries(o.structFields(name))) {
+      d.push(...jsdoc(fs.description, "  "), `  ${f}${fs.required ? "" : "?"}: ${tsType(normType(fs.type))}${fs.required ? "" : " | null"};`);
+    }
+    d.push("}", "");
+  }
+  if (Object.keys(o.interfaces).length) d.push("// ----- interfaces -----", "");
+  for (const [name, i] of Object.entries(o.interfaces)) {
+    iface(name, i.description, i.extends ?? [], projectionFields(o, name));
+    const impl = o.implementers(name).map((t) => JSON.stringify(t)).join(" | ") || "never";
+    d.push(`/** A row of list${name}: any ${name}, tagged with its concrete type. */`,
+      `export interface ${name}ListItem { objectType: ${impl}; ${lcFirst(name)}: ${name} }`, "");
+  }
+  if (visible.length) d.push("// ----- object types -----", "");
+  for (const [name, t] of visible) iface(name, t.description, t.implements ?? [], projectionFields(o, name));
+  const withParams = Object.entries(o.actions).filter(([, a]) => params(a).length);
+  if (withParams.length) d.push("// ----- command params -----", "");
+  for (const [name, a] of withParams) {
+    d.push(`/** Params of ${name}. */`, `export interface ${ucFirst(name)}Params {`,
+      ...params(a).map(([p, t]) => `  ${p}: ${tsType(t)};`), "}", "");
+  }
+
+  // ----- ports -----
+  const sig = (name: string, a: El) =>
+    `${name}(${params(a).length ? `params: D.${ucFirst(name)}Params` : ""}): Promise<D.CommandOutcome>`;
+  const keyOf = (name: string) => {
+    const k = o.types[name].key;
+    return [k, normType(o.props(name)[k].type)] as const;
+  };
+  const p = [...header("Ports: what the application core needs from the graph. Depends on the domain only."),
+    'import type * as D from "./domain.js";', "",
+    "/** Read side. One method per generated view. */", "export interface OntologyQueries {"];
+  for (const [name, t] of visible) {
+    const [k, kt] = keyOf(name);
+    p.push(`  /** One ${name} by ${k}, or null. ${oneLine(t.description).replaceAll("*/", "*\\/")} */`,
+      `  get${name}(${k}: ${tsType(kt, "D.")}): Promise<D.${name} | null>;`);
+  }
+  for (const name of Object.keys(o.interfaces)) {
+    p.push(`  /** A page of every ${name}, whatever its concrete type. */`, `  list${name}(page: D.Page): Promise<D.${name}ListItem[]>;`);
+  }
+  p.push("}", "", "/** Write side. Actions are the only way to change data. */", "export interface OntologyCommands {");
+  for (const [name, a] of Object.entries(o.actions)) p.push(...jsdoc(a.description, "  "), `  ${sig(name, a)};`);
+  p.push("}", "",
+    "/** Describes one command, for driving adapters that expose commands as tools (an MCP server, a CLI). */",
+    "export interface CommandSpec {", "  description: string;", "  target: string;", "  writes: readonly string[];",
+    "  /** Param name to Cypher type, e.g. `ZONED DATETIME`. */", "  params: Readonly<Record<string, string>>;", "}", "",
+    "export const commandCatalog = {");
+  for (const [name, a] of Object.entries(o.actions)) {
+    p.push(`  ${name}: {`, `    description: ${JSON.stringify(oneLine(a.description))},`, `    target: ${JSON.stringify(a.target)},`,
+      `    writes: ${JSON.stringify(a.writes ?? [])},`,
+      `    params: {${params(a).map(([n, t]) => ` ${n}: ${JSON.stringify(t)}`).join(",")}${params(a).length ? " " : ""}},`, "  },");
+  }
+  p.push("} as const satisfies Record<keyof OntologyCommands, CommandSpec>;");
+
+  // ----- neo4j adapter -----
+  // Temporal params arrive as ISO strings; wrap each $param in its Cypher constructor.
+  // Comment lines (the generated headers) are left as they are.
+  const bindTemporal = (cypher: string, types: Record<string, string>) =>
+    cypher.split("\n").map((line) => line.trimStart().startsWith("//") ? line : line.replace(/\$(\w+)\b/g, (m, name: string) => {
+      const t = types[name];
+      const inner = t && listInner(t);
+      const fn = t && CYPHER_TEMPORAL[inner ?? t];
+      if (!fn) return m;
+      return inner ? `[__v IN ${m} | ${fn}(__v)]` : `${fn}(${m})`;
+    })).join("\n");
+  // Points and integers convert in JS; helpers are emitted only when a param uses them.
+  const used = new Set<string>();
+  const toDriver = (t: string, expr: string) => {
+    const inner = listInner(t);
+    const fn = ({ POINT: "toDriverPoint", INTEGER: "toDriverInt" } as Record<string, string>)[inner ?? t];
+    if (!fn) return expr;
+    used.add(fn);
+    return inner ? `${expr}.map(${fn})` : `${fn}(${expr})`;
+  };
+  const prop = (k: string, expr: string) => (expr === k ? k : `${k}: ${expr}`);
+  const views = genViews(o);
+  const actionCypher = genActions(o);
+  const a = [...header("Driven adapter: implements the ports with neo4j-driver. The only generated file that imports it."),
+    'import neo4j from "neo4j-driver";', 'import type { QueryResult } from "neo4j-driver";',
+    'import type * as D from "./domain.js";', 'import type { OntologyCommands, OntologyQueries } from "./ports.js";', "",
+    "/** A neo4j-driver Session, Transaction or ManagedTransaction. The caller owns the unit of work. */",
+    "export interface CypherRunner {", "  run(query: string, parameters?: Record<string, unknown>): PromiseLike<QueryResult>;", "}", "",
+    "const isTemporal = (v: unknown) =>",
+    "  neo4j.isDate(v) || neo4j.isDateTime(v) || neo4j.isLocalDateTime(v) || neo4j.isLocalTime(v) || neo4j.isTime(v) || neo4j.isDuration(v);", "",
+    "/** Driver value to domain value: integers to bigint, temporals to ISO strings, points to D.Point. */",
+    "export function toDomain(v: unknown): unknown {",
+    "  if (v === null || v === undefined) return v;",
+    "  if (neo4j.isInt(v)) return v.toBigInt();",
+    "  if (neo4j.isPoint(v)) {",
+    "    const p: D.Point = { srid: neo4j.integer.toNumber(v.srid), x: v.x, y: v.y };",
+    "    if (v.z !== undefined) p.z = v.z;",
+    "    return p;",
+    "  }",
+    "  if (isTemporal(v)) return String(v);",
+    "  if (Array.isArray(v)) return v.map(toDomain);",
+    "  if (typeof v === \"object\") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, toDomain(x)]));",
+    "  return v;", "}", "",
+    "const CYPHER = {"];
+  const helpersAt = a.length - 1;
+  for (const [name, t] of visible) {
+    const [k, kt] = keyOf(name);
+    a.push(`  get${name}: ${templateLiteral(bindTemporal(views[`${name}.cypher`], { [k]: kt }))},`);
+  }
+  for (const name of Object.keys(o.interfaces)) a.push(`  list${name}: ${templateLiteral(views[`${name}.cypher`])},`);
+  for (const [name, act] of Object.entries(o.actions)) {
+    a.push(`  ${name}: ${templateLiteral(bindTemporal(actionCypher[`${name}.cypher`], Object.fromEntries(params(act))))},`);
+  }
+  a.push("} as const;", "",
+    "export class Neo4jOntology implements OntologyQueries, OntologyCommands {",
+    "  readonly #runner: CypherRunner;", "",
+    "  constructor(runner: CypherRunner) {", "    this.#runner = runner;", "  }");
+  if (visible.length) a.push("",
+    "  async #one<T>(query: string, params: Record<string, unknown>, alias: string): Promise<T | null> {",
+    "    const { records } = await this.#runner.run(query, params);",
+    "    return records.length ? (toDomain(records[0].get(alias)) as T) : null;", "  }");
+  if (Object.keys(o.interfaces).length) a.push("",
+    "  async #page<T>(query: string, page: D.Page): Promise<T[]> {",
+    "    const { records } = await this.#runner.run(query, { skip: neo4j.int(page.skip), limit: neo4j.int(page.limit) });",
+    "    return records.map((r) => toDomain(r.toObject()) as T);", "  }");
+  if (Object.keys(o.actions).length) a.push("",
+    "  async #command(query: string, params: Record<string, unknown>): Promise<D.CommandOutcome> {",
+    "    const { summary } = await this.#runner.run(query, params);",
+    "    const u = summary.counters.updates();",
+    "    return {",
+    ...["nodesCreated", "nodesDeleted", "relationshipsCreated", "relationshipsDeleted", "propertiesSet", "labelsAdded", "labelsRemoved"]
+      .map((k) => `      ${k}: u.${k},`),
+    "    };", "  }");
+  for (const [name] of visible) {
+    const [k, kt] = keyOf(name);
+    a.push("", `  get${name}(${k}: ${tsType(kt, "D.")}): Promise<D.${name} | null> {`,
+      `    return this.#one(CYPHER.get${name}, { ${prop(k, toDriver(kt, k))} }, ${JSON.stringify(lcFirst(name))});`, "  }");
+  }
+  for (const name of Object.keys(o.interfaces)) {
+    a.push("", `  list${name}(page: D.Page): Promise<D.${name}ListItem[]> {`, `    return this.#page(CYPHER.list${name}, page);`, "  }");
+  }
+  for (const [name, act] of Object.entries(o.actions)) {
+    const args = params(act).map(([n, t]) => prop(n, toDriver(t, `params.${n}`))).join(", ");
+    a.push("", `  ${sig(name, act)} {`, `    return this.#command(CYPHER.${name}, {${args ? ` ${args} ` : ""}});`, "  }");
+  }
+  a.push("}");
+  const helpers = [
+    ...(used.has("toDriverPoint") ? ["const toDriverPoint = (p: D.Point) => new neo4j.types.Point(neo4j.int(p.srid), p.x, p.y, p.z);"] : []),
+    ...(used.has("toDriverInt") ? ["const toDriverInt = (n: bigint) => neo4j.int(n);"] : []),
+  ];
+  if (helpers.length) a.splice(helpersAt, 0, ...helpers, "");
+
+  const text = (lines: string[]) => lines.join("\n").trimEnd() + "\n";
+  return { "domain.ts": text(d), "ports.ts": text(p), "neo4j.ts": text(a) };
+}
+
 function report(o: Ontology): number {
   for (const n of o.notes) console.log(`note: ${n}`);
   for (const w of o.warnings) console.log(`WARNING ${w}`);
@@ -943,7 +1206,8 @@ function main() {
   if (values.edition === "enterprise" && o.security.length) files["security.cypher"] = genSecurity(o, values.graph!);
   for (const [k, v] of Object.entries(genViews(o))) files[`views/${k}`] = v;
   for (const [k, v] of Object.entries(genActions(o))) files[`actions/${k}`] = v;
-  for (const sub of ["views", "actions"]) mkdirSync(join(out, sub), { recursive: true });
+  for (const [k, v] of Object.entries(genTs(o))) files[`ts/${k}`] = v;
+  for (const sub of ["views", "actions", "ts"]) mkdirSync(join(out, sub), { recursive: true });
   for (const [rel, text] of Object.entries(files)) writeFileSync(join(out, rel), text);
   console.log(`wrote ${Object.keys(files).length} files to ${out}`);
 }

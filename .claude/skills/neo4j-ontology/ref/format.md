@@ -199,3 +199,21 @@ node $S lock  ontology/                       # accept current core as the basel
 | `views/<Type>.cypher` | from the application | one projection per type or interface, with derived properties inlined |
 | `actions/<name>.cypher` | from the application or as agent tools | the action catalogue |
 | `agent-schema.md` | as the agent's prompt or MCP schema | the semantic surface; helpers summarised last |
+| `ts/domain.ts` | imported by the application core | domain types, no imports: structs, interfaces, visible object types, command params |
+| `ts/ports.ts` | imported by the application core | `OntologyQueries` (`get<Type>`, `list<Interface>`), `OntologyCommands` (one method per action), `commandCatalog` |
+| `ts/neo4j.ts` | wired in at the composition root | `Neo4jOntology`, the driven adapter implementing both ports with `neo4j-driver` |
+
+### TypeScript (hexagonal)
+
+The generated TypeScript follows ports and adapters. The application core imports only `domain.ts` and `ports.ts`, so it never sees the driver. Tests can pass in hand-written fakes of `OntologyQueries` and `OntologyCommands`. `neo4j.ts` is the only file that imports `neo4j-driver` (5.x), and it converts values at the boundary:
+
+| Cypher | Domain | Into Neo4j | Out of Neo4j |
+|---|---|---|---|
+| `INTEGER` | `bigint` | `neo4j.int` | `toBigInt()`, lossless |
+| `FLOAT`, `STRING`, `BOOLEAN` | `number`, `string`, `boolean` | as is | as is |
+| temporals | ISO 8601 strings (`IsoDate`, `IsoZonedDateTime`, ...) | the Cypher query wraps the param, e.g. `datetime($p)` | `toString()` |
+| `POINT` | `Point {srid, x, y, z?}` | `new neo4j.types.Point` | plain object |
+
+Domain types have the same shape as the views. Optional properties are `T | null`, an optional flat struct is `null` when every field is unset, and a node-stored struct with a main field gives `x` (the main value) plus `xValues`. `Neo4jOntology` takes any `Session`, `Transaction` or `ManagedTransaction`, so the caller owns the unit of work. Commands resolve to a `CommandOutcome` of update counters, and all zeros means the action matched nothing.
+
+Temporal params are rewritten by matching `$name` tokens, so do not put a temporal param's `$name` inside a string literal in action Cypher. `check` fails when two generated names clash, for example an action named `getShift` next to an object type `Shift`, or a struct named `Page`.

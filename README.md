@@ -8,7 +8,7 @@ The approach comes from Palantir's talk **[Deep Dive: Advanced Ontology](https:/
 
 | Path | What it is |
 |---|---|
-| [`.claude/skills/neo4j-ontology/`](.claude/skills/neo4j-ontology/SKILL.md) | Ontology-as-code: a YAML format and a tool (`scripts/ontology.ts`) that checks it and generates constraints, lint queries, views, security rules and an agent schema. One reference file per pattern in `ref/`. |
+| [`.claude/skills/neo4j-ontology/`](.claude/skills/neo4j-ontology/SKILL.md) | Ontology-as-code: a YAML format and a tool (`scripts/ontology.ts`) that checks it and generates constraints, lint queries, views, security rules, an agent schema and hexagonal TypeScript (domain types, ports, and a Neo4j adapter). One reference file per pattern in `ref/`. |
 | [`.claude/skills/ontology-review/`](.claude/skills/ontology-review/SKILL.md) | A review checklist that applies the four principles to an ontology change or a data-model proposal. |
 | [`examples/`](examples/) | Worked ontologies. [`devcon-talk/`](examples/devcon-talk/README.md) rebuilds every example from the talk. |
 

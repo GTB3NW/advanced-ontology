@@ -23,4 +23,4 @@ An action that adds struct value nodes should also update the owner's main field
 
 ## Agents
 
-`build/actions/<name>.cypher` holds one parameterised statement per action. The header comment lists the params. Expose these as tools (for example through an MCP server), not raw write access. Read access can be text-to-Cypher over `build/agent-schema.md`.
+`build/actions/<name>.cypher` holds one parameterised statement per action. The header comment lists the params. Expose these as tools (for example through an MCP server), not raw write access. In TypeScript, `build/ts/ports.ts` declares every action as a typed method on `OntologyCommands`, and `commandCatalog` carries each action's description and param types for a driving adapter (such as an MCP server) to register tools from. `Neo4jOntology` in `build/ts/neo4j.ts` implements those methods. Read access can be text-to-Cypher over `build/agent-schema.md`.
