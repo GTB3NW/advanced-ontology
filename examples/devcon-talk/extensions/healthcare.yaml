@@ -1,0 +1,52 @@
+module: ext.healthcare
+status: extension
+owner: clinical-apps
+description: Hospitals and patients. Extends the core Building interface without changing it.
+
+structs:
+  ClinicalNote:
+    description: One free-text note in a patient's record, with its own classification.
+    storage: node
+    includes: [Provenance]
+    fields:
+      text: {type: STRING, required: true}
+
+objectTypes:
+  Hospital:
+    description: A hospital site.
+    implements: [Building]
+    key: hospitalId
+    properties:
+      hospitalId: STRING
+      beds: INTEGER
+
+  Patient:
+    description: A person receiving care.
+    key: patientId
+    properties:
+      patientId: STRING
+      name: {type: STRING, required: true}
+      age: INTEGER
+      vip: BOOLEAN
+      notes:
+        description: Clinical notes. Each note is classified on its own (sub-cell security).
+        struct: ClinicalNote
+        multi: true
+
+linkTypes:
+  ADMITTED_TO:
+    description: The hospital a patient is currently admitted to.
+    from: Patient
+    to: Hospital
+    cardinality: many-to-one
+
+security:
+  roles:
+    clinician: Treats patients. Sees routine notes only.
+    psychiatry: Sees every clinical note, including restricted ones.
+  rules:
+    - {role: clinician, grant: match, type: Patient}
+    - {role: clinician, grant: match, type: ClinicalNote, where: {classification: routine}}
+    - {role: clinician, deny: read, type: Patient, properties: [vip]}
+    - {role: psychiatry, grant: match, type: Patient}
+    - {role: psychiatry, grant: match, type: ClinicalNote}

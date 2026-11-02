@@ -1,0 +1,41 @@
+module: core.facilities
+status: core
+owner: ontology-platform
+description: Physical places. Workflows target the Building interface, not the concrete types.
+
+interfaces:
+  Building:
+    description: A physical structure that people occupy.
+    properties:
+      name: {type: STRING, required: true}
+      address: {struct: Address}
+
+  SchedulableResource:
+    description: Anything that can be booked for a time slot.
+    properties:
+      bookingCalendarId: {type: STRING, required: true}
+
+objectTypes:
+  Restaurant:
+    description: A place serving food to the public.
+    implements: [Building]
+    key: restaurantId
+    properties:
+      restaurantId: STRING
+      cuisine: STRING
+
+  OfficeBuilding:
+    description: A building used for office work.
+    implements: [Building]
+    key: officeBuildingId
+    properties:
+      officeBuildingId: STRING
+      floors: INTEGER
+
+  Arena:
+    description: A venue for sports and large events.
+    implements: [Building, SchedulableResource]   # composition: not a SchedulableBuilding interface
+    key: arenaId
+    properties:
+      arenaId: STRING
+      capacity: INTEGER

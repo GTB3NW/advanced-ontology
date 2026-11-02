@@ -1,0 +1,68 @@
+module: core.people
+status: core
+owner: ontology-platform
+description: Employees, reporting lines, and the ventures they staff.
+
+objectTypes:
+  Employee:
+    description: A person employed by the organisation.
+    key: employeeId
+    properties:
+      employeeId: STRING
+      name: {type: STRING, required: true}
+      title: STRING
+      team: STRING
+      reportCount:
+        type: INTEGER
+        description: Number of direct reports.
+        derived: "COUNT { (this)<-[:REPORTS_TO]-(:Employee) }"
+      reportNames:
+        type: LIST<STRING>
+        description: Names of up to 10 direct reports.
+        derived: "COLLECT { MATCH (this)<-[:REPORTS_TO]-(r:Employee) RETURN r.name ORDER BY r.name LIMIT 10 }"
+
+  Venture:
+    description: A team or programme that employees are staffed on.
+    key: ventureId
+    properties:
+      ventureId: STRING
+      name: {type: STRING, required: true}
+
+  VentureStaffing:
+    description: One period during which an employee was staffed on a venture.
+    visibility: hidden          # helper: backs the WORKED_ON link
+    key: staffingId
+    properties:
+      staffingId: STRING
+      startDate: {type: DATE, required: true}
+      endDate: DATE
+
+linkTypes:
+  REPORTS_TO:
+    description: The employee's direct manager.
+    from: Employee
+    to: Employee
+    cardinality: many-to-one
+
+  STAFF_MEMBER:
+    description: The employee in a staffing period.
+    from: VentureStaffing
+    to: Employee
+    cardinality: many-to-one
+
+  STAFFED_VENTURE:
+    description: The venture in a staffing period.
+    from: VentureStaffing
+    to: Venture
+    cardinality: many-to-one
+
+  WORKED_ON:
+    description: Every venture the employee has ever been staffed on.
+    from: Employee
+    to: Venture
+    cardinality: many-to-many
+    backedBy:
+      via: VentureStaffing
+      fromLink: STAFF_MEMBER
+      toLink: STAFFED_VENTURE
+      materialize: true         # refresh.cypher keeps a real [:WORKED_ON] shortcut in sync

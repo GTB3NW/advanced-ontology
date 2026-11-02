@@ -1,0 +1,48 @@
+module: core.events
+status: core
+owner: ontology-platform
+description: Things that happen at a time and place.
+
+interfaces:
+  Event:
+    description: Something scheduled to happen at a start time.
+    properties:
+      title: {type: STRING, required: true}
+      startDateTime: {type: ZONED DATETIME, required: true}
+
+objectTypes:
+  NbaGame:
+    description: A scheduled NBA game.
+    implements: [Event]
+    key: gameId
+    properties:
+      gameId: STRING
+      homeTeam: STRING
+      awayTeam: STRING
+
+  DevConKeynote:
+    description: A keynote session at a developer conference.
+    implements: [Event]
+    key: keynoteId
+    properties:
+      keynoteId: STRING
+      speaker: STRING
+
+linkTypes:
+  HELD_AT:
+    description: The building where an event takes place.
+    from: Event
+    to: Building
+    cardinality: many-to-one
+
+actions:
+  rescheduleEvent:
+    description: Move any event to a new start time. Targets the Event interface, so it works for every event type.
+    target: Event
+    params:
+      id: STRING                # elementId of the event
+      newStart: ZONED DATETIME
+    writes: [startDateTime]
+    cypher: |
+      MATCH (this:Event) WHERE elementId(this) = $id
+      SET this.startDateTime = $newStart

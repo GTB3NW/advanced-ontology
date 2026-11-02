@@ -1,0 +1,52 @@
+module: core.equipment
+status: core
+owner: ontology-platform
+description: Equipment entities resolved from per-source observations.
+
+objectTypes:
+  Equipment:
+    description: A real piece of equipment. Several records can resolve to one canonical entity.
+    key: equipmentId
+    resolution:
+      observations: EquipmentObservation
+      observationLink: OBSERVATION_OF
+      resolvedLink: RESOLVED_TO
+    properties:
+      equipmentId: STRING
+      name: STRING
+      knownLocations:
+        type: LIST<POINT>
+        description: Up to 10 positions from every observation of every record resolved to the same entity.
+        derived: >-
+          COLLECT { MATCH (this)-[:RESOLVED_TO]->(canonical:Equipment)
+          MATCH (canonical)<-[:RESOLVED_TO]-(:Equipment)<-[:OBSERVATION_OF]-(o:EquipmentObservation)-[:HAS_GEOLOCATION]->(g:Geolocation)
+          RETURN g.value ORDER BY g.lastModifiedOn DESC LIMIT 10 }
+
+  EquipmentObservation:
+    description: One source system's record of a piece of equipment. Never edited after load.
+    visibility: hidden
+    key: observationId
+    properties:
+      observationId: STRING
+      source: {type: STRING, required: true}
+      classification: {type: STRING, required: true}
+      geolocation:
+        description: Reported positions over time. The newest one is the main value.
+        struct: Geolocation
+        multi: true
+        reducers:                       # applied in order; later reducers break ties
+          - {field: lastModifiedOn, pick: max}
+          - {field: createdOn, pick: max}
+
+linkTypes:
+  OBSERVATION_OF:
+    description: The equipment record this observation describes.
+    from: EquipmentObservation
+    to: Equipment
+    cardinality: many-to-one
+
+  RESOLVED_TO:
+    description: The canonical equipment entity. The canonical entity points to itself.
+    from: Equipment
+    to: Equipment
+    cardinality: many-to-one

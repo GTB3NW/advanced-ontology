@@ -1,0 +1,328 @@
+{
+  "structs.Provenance": {
+    "fields": {
+      "classification": {
+        "type": "STRING"
+      },
+      "createdBy": {
+        "type": "STRING"
+      },
+      "createdOn": {
+        "type": "ZONED DATETIME"
+      },
+      "lastModifiedBy": {
+        "type": "STRING"
+      },
+      "lastModifiedOn": {
+        "type": "ZONED DATETIME"
+      },
+      "source": {
+        "type": "STRING"
+      }
+    }
+  },
+  "structs.Address": {
+    "fields": {
+      "city": {
+        "required": true,
+        "type": "STRING"
+      },
+      "postalCode": {
+        "type": "STRING"
+      },
+      "state": {
+        "type": "STRING"
+      },
+      "street": {
+        "required": true,
+        "type": "STRING"
+      }
+    },
+    "storage": "flat"
+  },
+  "structs.Geolocation": {
+    "fields": {
+      "endDateTime": {
+        "type": "ZONED DATETIME"
+      },
+      "startDateTime": {
+        "type": "ZONED DATETIME"
+      },
+      "value": {
+        "required": true,
+        "type": "POINT"
+      }
+    },
+    "includes": [
+      "Provenance"
+    ],
+    "mainField": "value",
+    "storage": "node"
+  },
+  "interfaces.Event": {
+    "properties": {
+      "startDateTime": {
+        "required": true,
+        "type": "ZONED DATETIME"
+      },
+      "title": {
+        "required": true,
+        "type": "STRING"
+      }
+    }
+  },
+  "interfaces.Building": {
+    "properties": {
+      "address": {
+        "struct": "Address"
+      },
+      "name": {
+        "required": true,
+        "type": "STRING"
+      }
+    }
+  },
+  "interfaces.SchedulableResource": {
+    "properties": {
+      "bookingCalendarId": {
+        "required": true,
+        "type": "STRING"
+      }
+    }
+  },
+  "objectTypes.Equipment": {
+    "key": "equipmentId",
+    "properties": {
+      "equipmentId": {
+        "type": "STRING"
+      },
+      "knownLocations": {
+        "derived": "COLLECT { MATCH (this)-[:RESOLVED_TO]->(canonical:Equipment) MATCH (canonical)<-[:RESOLVED_TO]-(:Equipment)<-[:OBSERVATION_OF]-(o:EquipmentObservation)-[:HAS_GEOLOCATION]->(g:Geolocation) RETURN g.value ORDER BY g.lastModifiedOn DESC LIMIT 10 }",
+        "type": "LIST<POINT>"
+      },
+      "name": {
+        "type": "STRING"
+      }
+    },
+    "resolution": {
+      "observationLink": "OBSERVATION_OF",
+      "observations": "EquipmentObservation",
+      "resolvedLink": "RESOLVED_TO"
+    }
+  },
+  "objectTypes.EquipmentObservation": {
+    "key": "observationId",
+    "properties": {
+      "classification": {
+        "required": true,
+        "type": "STRING"
+      },
+      "geolocation": {
+        "multi": true,
+        "reducers": [
+          {
+            "field": "lastModifiedOn",
+            "pick": "max"
+          },
+          {
+            "field": "createdOn",
+            "pick": "max"
+          }
+        ],
+        "struct": "Geolocation"
+      },
+      "observationId": {
+        "type": "STRING"
+      },
+      "source": {
+        "required": true,
+        "type": "STRING"
+      }
+    },
+    "visibility": "hidden"
+  },
+  "objectTypes.NbaGame": {
+    "implements": [
+      "Event"
+    ],
+    "key": "gameId",
+    "properties": {
+      "awayTeam": {
+        "type": "STRING"
+      },
+      "gameId": {
+        "type": "STRING"
+      },
+      "homeTeam": {
+        "type": "STRING"
+      }
+    }
+  },
+  "objectTypes.DevConKeynote": {
+    "implements": [
+      "Event"
+    ],
+    "key": "keynoteId",
+    "properties": {
+      "keynoteId": {
+        "type": "STRING"
+      },
+      "speaker": {
+        "type": "STRING"
+      }
+    }
+  },
+  "objectTypes.Restaurant": {
+    "implements": [
+      "Building"
+    ],
+    "key": "restaurantId",
+    "properties": {
+      "cuisine": {
+        "type": "STRING"
+      },
+      "restaurantId": {
+        "type": "STRING"
+      }
+    }
+  },
+  "objectTypes.OfficeBuilding": {
+    "implements": [
+      "Building"
+    ],
+    "key": "officeBuildingId",
+    "properties": {
+      "floors": {
+        "type": "INTEGER"
+      },
+      "officeBuildingId": {
+        "type": "STRING"
+      }
+    }
+  },
+  "objectTypes.Arena": {
+    "implements": [
+      "Building",
+      "SchedulableResource"
+    ],
+    "key": "arenaId",
+    "properties": {
+      "arenaId": {
+        "type": "STRING"
+      },
+      "capacity": {
+        "type": "INTEGER"
+      }
+    }
+  },
+  "objectTypes.Employee": {
+    "key": "employeeId",
+    "properties": {
+      "employeeId": {
+        "type": "STRING"
+      },
+      "name": {
+        "required": true,
+        "type": "STRING"
+      },
+      "reportCount": {
+        "derived": "COUNT { (this)<-[:REPORTS_TO]-(:Employee) }",
+        "type": "INTEGER"
+      },
+      "reportNames": {
+        "derived": "COLLECT { MATCH (this)<-[:REPORTS_TO]-(r:Employee) RETURN r.name ORDER BY r.name LIMIT 10 }",
+        "type": "LIST<STRING>"
+      },
+      "team": {
+        "type": "STRING"
+      },
+      "title": {
+        "type": "STRING"
+      }
+    }
+  },
+  "objectTypes.Venture": {
+    "key": "ventureId",
+    "properties": {
+      "name": {
+        "required": true,
+        "type": "STRING"
+      },
+      "ventureId": {
+        "type": "STRING"
+      }
+    }
+  },
+  "objectTypes.VentureStaffing": {
+    "key": "staffingId",
+    "properties": {
+      "endDate": {
+        "type": "DATE"
+      },
+      "staffingId": {
+        "type": "STRING"
+      },
+      "startDate": {
+        "required": true,
+        "type": "DATE"
+      }
+    },
+    "visibility": "hidden"
+  },
+  "linkTypes.OBSERVATION_OF": {
+    "cardinality": "many-to-one",
+    "from": "EquipmentObservation",
+    "to": "Equipment"
+  },
+  "linkTypes.RESOLVED_TO": {
+    "cardinality": "many-to-one",
+    "from": "Equipment",
+    "to": "Equipment"
+  },
+  "linkTypes.HELD_AT": {
+    "cardinality": "many-to-one",
+    "from": "Event",
+    "to": "Building"
+  },
+  "linkTypes.REPORTS_TO": {
+    "cardinality": "many-to-one",
+    "from": "Employee",
+    "to": "Employee"
+  },
+  "linkTypes.STAFF_MEMBER": {
+    "cardinality": "many-to-one",
+    "from": "VentureStaffing",
+    "to": "Employee"
+  },
+  "linkTypes.STAFFED_VENTURE": {
+    "cardinality": "many-to-one",
+    "from": "VentureStaffing",
+    "to": "Venture"
+  },
+  "linkTypes.WORKED_ON": {
+    "backedBy": {
+      "fromLink": "STAFF_MEMBER",
+      "materialize": true,
+      "toLink": "STAFFED_VENTURE",
+      "via": "VentureStaffing"
+    },
+    "cardinality": "many-to-many",
+    "from": "Employee",
+    "to": "Venture"
+  },
+  "actions.rescheduleEvent": {
+    "cypher": "MATCH (this:Event) WHERE elementId(this) = $id\nSET this.startDateTime = $newStart\n",
+    "params": {
+      "id": {
+        "type": "STRING"
+      },
+      "newStart": {
+        "type": "ZONED DATETIME"
+      }
+    },
+    "target": "Event",
+    "writes": [
+      "startDateTime"
+    ]
+  }
+}

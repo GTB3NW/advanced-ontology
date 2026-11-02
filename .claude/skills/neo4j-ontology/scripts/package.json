@@ -1,0 +1,17 @@
+{
+  "name": "neo4j-ontology",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=23.6" },
+  "scripts": {
+    "ontology": "node ontology.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.8.0"
+  }
+}

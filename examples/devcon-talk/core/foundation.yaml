@@ -1,0 +1,34 @@
+module: core.foundation
+status: core
+owner: ontology-platform
+description: Shared structs reused across every domain module.
+
+structs:
+  Provenance:
+    description: Who recorded a value, when, and from which source. Include it in any struct that carries metadata.
+    fields:
+      createdOn: ZONED DATETIME
+      createdBy: STRING
+      lastModifiedOn: ZONED DATETIME
+      lastModifiedBy: STRING
+      source: STRING
+      classification: STRING
+
+  Address:
+    description: A postal address.
+    storage: flat              # stored on the owner as address_street, address_city, ...
+    fields:
+      street: {type: STRING, required: true}
+      city: {type: STRING, required: true}
+      state: STRING
+      postalCode: STRING
+
+  Geolocation:
+    description: An observed position, with provenance. Behaves as a plain POINT through its main field.
+    storage: node              # stored as (:Geolocation:Value) nodes linked from the owner
+    includes: [Provenance]
+    mainField: value
+    fields:
+      value: {type: POINT, required: true}
+      startDateTime: ZONED DATETIME
+      endDateTime: ZONED DATETIME
